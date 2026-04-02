@@ -1,75 +1,85 @@
 import streamlit as st
 import cv2
 import numpy as np
-import mediapipe as mp
 from PIL import Image
 import io
 
-# 恢復成正常的標準寫法
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1)
-
 st.set_page_config(page_title="AI 護照格式自動校正", layout="wide")
-st.title("🪪 AI 護照照片自動校正工具")
-st.write("上傳歪斜的照片，AI 將自動對準雙眼、校正水平並調整構圖。")
+st.title("🪪 專業版護照照片自動校正工具")
+st.write("上傳歪斜的照片，系統將自動偵測五官、校正水平並調整為護照標準構圖。")
+
+@st.cache_resource
+def load_cascades():
+    # 使用 OpenCV 內建且絕對穩定的預訓練模型，免除額外安裝套件的麻煩
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+    return face_cascade, eye_cascade
 
 def align_and_crop_face(image):
-    # 轉換 PIL 到 OpenCV 格式
     img_np = np.array(image)
-    h, w, _ = img_np.shape
-    rgb_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    face_cascade, eye_cascade = load_cascades()
 
-    # 1. 偵測臉部特徵點
-    results = face_mesh.process(cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB))
-    
-    if not results.multi_face_landmarks:
+    # 1. 偵測臉部
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(100, 100))
+    if len(faces) == 0:
         return None, "找不到人臉，請確保照片清晰且光線充足。"
-
-    landmarks = results.multi_face_landmarks[0].landmark
     
-    # 2. 取得左右眼中心座標 (MediaPipe 特徵點索引)
-    # 左眼: 33, 右眼: 263
-    left_eye = (landmarks[33].x * w, landmarks[33].y * h)
-    right_eye = (landmarks[263].x * w, landmarks[263].y * h)
+    # 取最大的臉，避免背景雜物干擾
+    x, y, w, h = max(faces, key=lambda rect: rect[2] * rect[3])
+    
+    # 2. 為了更精準偵測眼睛，只取臉部上半段作為感興趣區域 (ROI)
+    roi_gray = gray[y:int(y+h*0.6), x:x+w]
+    eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=5)
 
-    # 3. 計算旋轉角度
-    dY = right_eye[1] - left_eye[1]
-    dX = right_eye[0] - left_eye[0]
-    angle = np.degrees(np.arctan2(dY, dX))
+    rotated_img = img_np
+    msg = "成功完成構圖裁切！"
 
-    # 4. 執行旋轉校正
-    eye_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
-    M = cv2.getRotationMatrix2D(eye_center, angle, 1)
-    rotated = cv2.warpAffine(img_np, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255,255,255))
+    # 3. 如果找到兩隻以上的眼睛，計算斜率並旋轉
+    if len(eyes) >= 2:
+        # 依 X 座標排序，區分左右眼
+        eyes = sorted(eyes, key=lambda e: e[0])
+        left_eye = eyes[0]
+        right_eye = eyes[-1]
 
-    # 5. 在旋轉後的圖中再次偵測臉部以進行精準裁切
-    results_rotated = face_mesh.process(cv2.cvtColor(rotated, cv2.COLOR_RGB2BGR))
-    if results_rotated.multi_face_landmarks:
-        lms = results_rotated.multi_face_landmarks[0].landmark
-        # 取得臉部範圍
-        x_coords = [lm.x * w for lm in lms]
-        y_coords = [lm.y * h for lm in lms]
+        # 計算雙眼中心點的絕對座標
+        left_center = (x + left_eye[0] + left_eye[2]//2, y + left_eye[1] + left_eye[3]//2)
+        right_center = (x + right_eye[0] + right_eye[2]//2, y + right_eye[1] + right_eye[3]//2)
+
+        dY = right_center[1] - left_center[1]
+        dX = right_center[0] - left_center[0]
+        angle = np.degrees(np.arctan2(dY, dX))
+
+        # 以雙眼中點為軸心旋轉
+        eyes_center = ((left_center[0] + right_center[0]) // 2, (left_center[1] + right_center[1]) // 2)
+        M = cv2.getRotationMatrix2D(eyes_center, angle, 1)
         
-        face_w = max(x_coords) - min(x_coords)
-        face_h = max(y_coords) - min(y_coords)
+        # 使用白色(255,255,255)填補旋轉後的黑邊，符合護照白底需求
+        rotated_img = cv2.warpAffine(img_np, M, (img_np.shape[1], img_np.shape[0]), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255,255,255))
+        msg = "成功校正水平並調整構圖！"
+
+    # 4. 在校正後的圖片上重新定位臉部進行標準裁切
+    gray_rot = cv2.cvtColor(rotated_img, cv2.COLOR_RGB2GRAY)
+    faces_rot = face_cascade.detectMultiScale(gray_rot, 1.1, 5)
+    
+    if len(faces_rot) > 0:
+        xr, yr, wr, hr = max(faces_rot, key=lambda rect: rect[2] * rect[3])
+        center_x = xr + wr // 2
+        center_y = yr + hr // 2
         
-        # 定義裁切中心與範圍 (預留頭頂與肩膀空間)
-        center_x = int(sum(x_coords) / len(lms))
-        center_y = int(sum(y_coords) / len(lms))
-        
-        # 護照標準：頭部約佔高度的 70-80%
-        crop_h = int(face_h * 2.0)
-        crop_w = int(crop_h * 0.77) # 接近 35:45 比例
+        # 護照標準：頭部佔比要大，比例約為 35:45
+        crop_h = int(hr * 1.9)
+        crop_w = int(crop_h * 0.77)
         
         x1 = max(0, center_x - crop_w // 2)
-        y1 = max(0, center_y - int(crop_h * 0.55)) # 稍微往上偏，留出頭頂空間
-        x2 = min(w, x1 + crop_w)
-        y2 = min(h, y1 + crop_h)
+        y1 = max(0, center_y - int(crop_h * 0.5)) # 往上留白給頭頂空間
+        x2 = min(rotated_img.shape[1], x1 + crop_w)
+        y2 = min(rotated_img.shape[0], y1 + crop_h)
         
-        final_img = rotated[y1:y2, x1:x2]
-        return final_img, "成功校正水平並調整構圖！"
-
-    return rotated, "已校正水平，但無法執行進階裁切。"
+        final_img = rotated_img[y1:y2, x1:x2]
+        return final_img, msg
+        
+    return rotated_img, "已完成水平校正。"
 
 uploaded_file = st.file_uploader("選擇您的原始照片", type=["jpg", "jpeg", "png"])
 
@@ -82,18 +92,17 @@ if uploaded_file:
         st.image(img, use_container_width=True)
 
     with st.spinner("AI 正在分析並校正中..."):
-        processed_np, msg = align_and_crop_face(img)
+        processed_np, result_msg = align_and_crop_face(img)
         
         if processed_np is not None:
             processed_img = Image.fromarray(processed_np)
             with col2:
                 st.subheader("校正後結果")
                 st.image(processed_img, use_container_width=True)
-                st.success(msg)
+                st.success(result_msg)
                 
-                # 下載按鈕
                 buf = io.BytesIO()
                 processed_img.save(buf, format="JPEG", quality=95)
                 st.download_button("⬇️ 下載護照規格照片", buf.getvalue(), "passport_photo.jpg", "image/jpeg")
         else:
-            st.error(msg)
+            st.error(result_msg)
