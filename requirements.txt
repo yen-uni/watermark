@@ -1,5 +1,5 @@
 streamlit
 opencv-python-headless
-Pillow
+mediapipe
 numpy
-streamlit-drawable-canvas
+Pillow
