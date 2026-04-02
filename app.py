@@ -9,7 +9,6 @@ from streamlit_cropper import st_cropper
 # --- 0. 系統安全鎖 (防路人攻擊) ---
 st.set_page_config(page_title="居留證大頭照與列印排版系統", layout="centered")
 
-# 使用 session_state 來儲存生成的照片，防止重新整理
 if 'processed_photo' not in st.session_state:
     st.session_state['processed_photo'] = None
 if 'final_4x6_image' not in st.session_state:
@@ -17,7 +16,6 @@ if 'final_4x6_image' not in st.session_state:
 
 app_password = st.sidebar.text_input("請輸入內部密碼解鎖系統", type="password")
 
-# 內部密碼
 if app_password != "unipro@":
     st.warning("🔒 這是環久內部專用系統，請在左側輸入正確密碼以解鎖功能。擅自盜用必將追究")
     st.stop()
@@ -28,24 +26,19 @@ try:
 except:
     REMOVEBG_API_KEY = ""
 
-# 台灣身分證/居留證標準尺寸 (3.5x4.5cm, 300dpi)
 TARGET_WIDTH_PX = 413
 TARGET_HEIGHT_PX = 531
-
-# 4x6 吋列印畫布尺寸 (10.16x15.24cm, 300dpi)
 CANVAS_WIDTH = 1800
 CANVAS_HEIGHT = 1200
 
-st.title("🇹🇼 環久大頭照證件照極速與列印系統V10")
+st.title("🇹🇼 環久大頭照證件照極速與列印系統V10.1")
 st.info(
     "功能：生成標準大頭照，並自動排版為 4x6 吋列印檔。\n\n"
     "**操作步驟:**\n"
     "1. 調正頭部與框選範圍 -> 2. 調亮度去背 (可核對輔助線) -> 3. 選擇排版下載列印檔。\n"
 )
 
-# --- 函數定義：產生 4x6 排版檔 ---
 def generate_4x6_layout(single_photo, layout_type):
-    # (此區段完全保留您原本完美的排版邏輯)
     canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "WHITE")
     
     if layout_type == "2inch":
@@ -54,7 +47,6 @@ def generate_4x6_layout(single_photo, layout_type):
         margin_y = 49 
         gap_x = 30
         gap_y = 40
-        
         for row in range(2):
             for col in range(4):
                 x = margin_x + col * (photo_w + gap_x)
@@ -66,12 +58,10 @@ def generate_4x6_layout(single_photo, layout_type):
         target_1inch_h = 413
         photo_1inch = single_photo.resize((target_1inch_w, target_1inch_h), Image.Resampling.LANCZOS)
         photo_w, photo_h = photo_1inch.size
-        
         margin_x = 83
         margin_y = 147 
         gap_x = 40
         gap_y = 80
-        
         for row in range(2):
             for col in range(5):
                 x = margin_x + col * (photo_w + gap_x)
@@ -80,18 +70,24 @@ def generate_4x6_layout(single_photo, layout_type):
 
     return canvas
 
-# --- 2. 檔案上傳與核心處理 (步驟一與二) ---
 uploaded_file = st.file_uploader("請上傳員工照片 (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    original_image = Image.open(uploaded_file).convert("RGB")
+    # 🛠️ 修復點 2：完美處理透明 PNG 背景，強制轉為純白底色，避免黑角
+    img_raw = Image.open(uploaded_file)
+    if img_raw.mode in ('RGBA', 'LA') or (img_raw.mode == 'P' and 'transparency' in img_raw.info):
+        bg = Image.new('RGB', img_raw.size, (255, 255, 255))
+        bg.paste(img_raw, (0, 0), img_raw.convert('RGBA'))
+        original_image = bg
+    else:
+        original_image = img_raw.convert('RGB')
     
     st.write("### ✂️ 第一步：校正頭部傾斜與框選範圍")
+    st.warning("💡 **請務必先拉動下方滑桿將頭部轉正，轉正後再畫紅框裁切。**")
     
-    # 【新增功能區段】：旋轉校正
-    angle = st.slider("旋轉角度 (若頭部歪斜，請先微調此拉桿調正)", -30.0, 30.0, 0.0, 0.5)
+    angle = st.slider("🔄 旋轉角度 (若頭部歪斜，請先微調此拉桿調正)", -30.0, 30.0, 0.0, 0.5)
     
-    # 執行擴展邊界的旋轉計算
+    # 執行旋轉與邊界擴充
     img_np = np.array(original_image)
     h, w = img_np.shape[:2]
     center = (w // 2, h // 2)
@@ -105,19 +101,20 @@ if uploaded_file is not None:
     M[0, 2] += (new_w / 2) - center[0]
     M[1, 2] += (new_h / 2) - center[1]
     
-    # 旋轉並補白底
     rotated_np = cv2.warpAffine(img_np, M, (new_w, new_h), borderValue=(255, 255, 255))
     rotated_image = Image.fromarray(rotated_np)
 
     st.write("請拖拉紅色框線，圈選最大頭部比例（請將肩膀切在框外）：")
 
-    # 將旋轉後的圖片 (rotated_image) 餵給 st_cropper
+    # 🛠️ 修復點 1：讓 key 跟著 angle 變化，強制 cropper 套件即時刷新旋轉後的圖片！
+    dynamic_key = f"main_cropper_{angle}"
+    
     cropped_image = st_cropper(
         rotated_image, 
         aspect_ratio=(35, 45), 
         box_color='#FF0000',
         return_type='image',
-        key='main_cropper'
+        key=dynamic_key  # 關鍵修復在這裡！
     )
 
     st.write("### ☀️ 第二步：調整亮度與核對頭部比例")
@@ -126,14 +123,12 @@ if uploaded_file is not None:
     enhancer = ImageEnhance.Brightness(cropped_image)
     final_preview = enhancer.enhance(brightness)
 
-    # --- 繪製護照頭圍比例輔助線 ---
     def add_passport_guidelines(img):
         guide_img = img.copy()
         draw = ImageDraw.Draw(guide_img)
         w, h = guide_img.size
         
         top_margin = int(h * (0.4 / 4.5)) 
-        
         max_h = int(h * (3.6 / 4.5))
         max_w = int(w * 0.72) 
         max_x0 = (w - max_w) // 2
@@ -185,10 +180,7 @@ if uploaded_file is not None:
                     response = requests.post(
                         'https://api.remove.bg/v1.0/removebg',
                         files={'image_file': img_data},
-                        data={
-                            'size': 'preview', 
-                            'format': 'png'
-                        },
+                        data={'size': 'preview', 'format': 'png'},
                         headers={'X-Api-Key': REMOVEBG_API_KEY},
                     )
 
@@ -199,7 +191,6 @@ if uploaded_file is not None:
                         final_rgb_image = white_bg.convert("RGB")
 
                         final_image = final_rgb_image.resize((TARGET_WIDTH_PX, TARGET_HEIGHT_PX), Image.Resampling.LANCZOS)
-                        
                         st.session_state['processed_photo'] = final_image
 
                         st.success("🎉 單張大頭照極速去背成功！請儲存並繼續下方步驟。")
@@ -230,7 +221,7 @@ if uploaded_file is not None:
                 except Exception as e:
                     st.error(f"❌ 發生錯誤: {str(e)}")
 
-# --- 3. 4x6 列印排版區域 (完全保留) ---
+# --- 3. 4x6 列印排版區域 ---
 st.markdown("---")
 if st.session_state['processed_photo'] is not None:
     st.subheader("🖨️ 第三步：生成 4x6 吋列印排版檔")
@@ -252,7 +243,6 @@ if st.session_state['processed_photo'] is not None:
 
     if st.session_state['final_4x6_image'] is not None:
         st.write("### ✅ 4x6 吋排版預覽")
-        
         st.image(st.session_state['final_4x6_image'], caption="此為 4x6 吋實體比例預覽 (縮圖)", use_container_width=True)
         
         if current_layout_type == "2inch":
@@ -277,4 +267,4 @@ else:
     st.info("👋 請先完成上方「第一步」與「第二步」，生成單張大頭照後，此處將自動開啟排版功能。")
 
 st.markdown("---")
-st.markdown("© 2026 環久國際開發有限公司人力文件處理系統 | V10")
+st.markdown("© 2026 環久國際開發有限公司人力文件處理系統 | V10.1")
