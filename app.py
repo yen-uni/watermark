@@ -153,3 +153,116 @@ if uploaded_file is not None:
         
         if show_guide:
             st.markdown(
+                "<span style='color:red'>■ 紅圈：頭頂到下巴不得大於 3.6cm</span><br>"
+                "<span style='color:#00FF00'>■ 綠圈：頭頂到下巴不得小於 3.2cm</span>", 
+                unsafe_allow_html=True
+            )
+
+    with col_action:
+        st.write("確認預覽的範圍無誤後，即可點擊按鈕生成標準單張大頭照。")
+        st.write("*(之後即可進行 4x6 吋列印排版)*")
+        process_btn = st.button("🚀 確認裁切並去背換白底", use_container_width=True)
+
+    if process_btn:
+        st.session_state['final_4x6_image'] = None
+        
+        if not REMOVEBG_API_KEY:
+            st.error("❌ 找不到金鑰，請確認 Streamlit Secrets 中設定了 `REMOVEBG_API_KEY`！")
+        else:
+            with st.spinner("Remove.bg 正在進行極速去背，請稍候 (約 1-2 秒)..."):
+                try:
+                    img_byte_arr = io.BytesIO()
+                    final_preview.save(img_byte_arr, format='PNG')
+                    img_data = img_byte_arr.getvalue()
+
+                    response = requests.post(
+                        'https://api.remove.bg/v1.0/removebg',
+                        files={'image_file': img_data},
+                        data={'size': 'preview', 'format': 'png'},
+                        headers={'X-Api-Key': REMOVEBG_API_KEY},
+                    )
+
+                    if response.status_code == 200:
+                        transparent_image = Image.open(io.BytesIO(response.content)).convert("RGBA")
+                        white_bg = Image.new("RGBA", transparent_image.size, "WHITE")
+                        white_bg.paste(transparent_image, (0, 0), transparent_image)
+                        final_rgb_image = white_bg.convert("RGB")
+
+                        final_image = final_rgb_image.resize((TARGET_WIDTH_PX, TARGET_HEIGHT_PX), Image.Resampling.LANCZOS)
+                        st.session_state['processed_photo'] = final_image
+
+                        st.success("🎉 單張大頭照極速去背成功！請儲存並繼續下方步驟。")
+                        
+                        st.subheader("✅ 最終成果 (單張 3.5×4.5cm)")
+                        col_result1, col_result2 = st.columns([1, 1])
+                        with col_result1:
+                            st.image(final_image, width=300)
+                        
+                        with col_result2:
+                            st.write("規格詳情：")
+                            st.write(f"- 尺寸: 3.5x4.5 cm")
+                            st.write(f"- 解析度: 300 DPI ({TARGET_WIDTH_PX}x{TARGET_HEIGHT_PX}px)")
+                            st.write("- 背景: 純白 (#FFFFFF)")
+
+                        final_byte_arr = io.BytesIO()
+                        final_image.save(final_byte_arr, format='PNG', quality=100, dpi=(300, 300))
+                        
+                        st.download_button(
+                            label="📥 下載單張標準大頭照 (PNG)",
+                            data=final_byte_arr.getvalue(),
+                            file_name=f"Taiwan_ID_Photo_Single_{uploaded_file.name.split('.')[0]}.png",
+                            mime="image/png"
+                        )
+                    else:
+                        st.error(f"❌ API 錯誤: {response.status_code}")
+                        st.error(response.text)
+                except Exception as e:
+                    st.error(f"❌ 發生錯誤: {str(e)}")
+
+# --- 3. 4x6 列印排版區域 ---
+st.markdown("---")
+if st.session_state['processed_photo'] is not None:
+    st.subheader("🖨️ 第三步：生成 4x6 吋列印排版檔")
+    st.write("請選擇需要的列印樣式，系統將自動將上方的標準照排版在 4x6 吋畫布上：")
+    
+    layout_option = st.radio(
+        "選擇排版樣式",
+        ["2吋證件照 (8張/頁, 適合身分證/居留證)", "1吋大頭照 (10張/頁)"],
+        index=0
+    )
+    
+    current_layout_type = "2inch" if "2吋" in layout_option else "1inch"
+    filename_suffix = "2Inch_x8" if current_layout_type == "2inch" else "1Inch_x10"
+
+    if st.button("🖼️ 生成 4x6 列印檔預覽", use_container_width=True):
+        with st.spinner("正在自動排版 4x6 吋檔案..."):
+            layout_image = generate_4x6_layout(st.session_state['processed_photo'], current_layout_type)
+            st.session_state['final_4x6_image'] = layout_image
+
+    if st.session_state['final_4x6_image'] is not None:
+        st.write("### ✅ 4x6 吋排版預覽")
+        st.image(st.session_state['final_4x6_image'], caption="此為 4x6 吋實體比例預覽 (縮圖)", use_container_width=True)
+        
+        if current_layout_type == "2inch":
+            st.info("排版規格：4x2 共 8 張。每張大小：標準 2吋 (3.5x4.5cm)。適合身分證、居留證、護照。")
+        else:
+            st.info("排版規格：5x2 共 10 張。每張大小：標準 1吋 (約 2.5x3.5cm)。適合一般證照。")
+
+        final_4x6_byte_arr = io.BytesIO()
+        st.session_state['final_4x6_image'].save(final_4x6_byte_arr, format='JPEG', quality=95, dpi=(300, 300))
+        
+        orig_filename = uploaded_file.name.split('.')[0] if uploaded_file else "Photo"
+        st.download_button(
+            label=f"📥 下載 4x6 吋列印檔 (JPG) - {layout_option.split(' ')[0]}",
+            data=final_4x6_byte_arr.getvalue(),
+            file_name=f"Standard_4X6_{filename_suffix}_{orig_filename}.jpg",
+            mime="image/jpeg",
+            use_container_width=True
+        )
+
+else:
+    st.subheader("🖨️ 第三步：生成 4x6 吋列印排版檔")
+    st.info("👋 請先完成上方「第一步」與「第二步」，生成單張大頭照後，此處將自動開啟排版功能。")
+
+st.markdown("---")
+st.markdown("© 2026 環久國際開發有限公司人力文件處理系統 | V10.2")
