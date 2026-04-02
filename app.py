@@ -2,11 +2,12 @@ import streamlit as st
 import cv2
 import numpy as np
 import mediapipe as mp
+# 🛠️ 關鍵修正：精確指定引入路徑，解決找不到 solutions 的問題
+from mediapipe.python.solutions import face_mesh as mp_face_mesh
 from PIL import Image
 import io
 
 # 初始化 MediaPipe 人臉偵測
-mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1)
 
 st.set_page_config(page_title="AI 護照格式自動校正", layout="wide")
@@ -43,8 +44,6 @@ def align_and_crop_face(image):
     rotated = cv2.warpAffine(img_np, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255,255,255))
 
     # 5. 在旋轉後的圖中再次偵測臉部以進行精準裁切
-    # 護照比例通常為 35mm x 45mm (約 7:9)
-    # 這裡我們以臉部為中心進行智慧裁切
     results_rotated = face_mesh.process(cv2.cvtColor(rotated, cv2.COLOR_RGB2BGR))
     if results_rotated.multi_face_landmarks:
         lms = results_rotated.multi_face_landmarks[0].landmark
@@ -91,7 +90,7 @@ if uploaded_file:
             with col2:
                 st.subheader("校正後結果")
                 st.image(processed_img, use_container_width=True)
-                st.info(msg)
+                st.success(msg)
                 
                 # 下載按鈕
                 buf = io.BytesIO()
