@@ -2,12 +2,11 @@ import streamlit as st
 import cv2
 import numpy as np
 import mediapipe as mp
-# 🛠️ 關鍵修正：精確指定引入路徑，解決找不到 solutions 的問題
-from mediapipe.python.solutions import face_mesh as mp_face_mesh
 from PIL import Image
 import io
 
-# 初始化 MediaPipe 人臉偵測
+# 恢復成正常的標準寫法
+mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1)
 
 st.set_page_config(page_title="AI 護照格式自動校正", layout="wide")
