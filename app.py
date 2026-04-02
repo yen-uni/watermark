@@ -16,7 +16,7 @@ if 'final_4x6_image' not in st.session_state:
 
 app_password = st.sidebar.text_input("請輸入內部密碼解鎖系統", type="password")
 
-if app_password != "@unipro":
+if app_password != "unipro@":
     st.warning("🔒 這是環久內部專用系統，請在左側輸入正確密碼以解鎖功能。擅自盜用必將追究")
     st.stop()
 
